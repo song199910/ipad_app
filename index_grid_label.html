@@ -70,6 +70,34 @@
     }
     #size { width: 160px; }
     .err { color:#b00020; font-weight:600; padding-left:8px; }
+
+    /* 文本工具一开始隐藏 */
+    #text-tools {
+      display: none;
+    }
+
+    /* 左下角小问号 */
+    #secret-toggle {
+      position: fixed;
+      left: 6px;
+      bottom: 6px;
+      width: 20px;
+      height: 20px;
+      padding: 0;
+      border-radius: 50%;
+      border: 1px solid #ccc;
+      background: #f5f5f5;
+      font-size: 12px;
+      line-height: 18px;
+      text-align: center;
+      color: #666;
+      opacity: 0.4;
+      cursor: pointer;
+      z-index: 10;
+    }
+    #secret-toggle:active {
+      transform: translateY(1px);
+    }
   </style>
 </head>
 <body>
@@ -87,8 +115,8 @@
              disabled style="display:none;">
     </label>
 
-    <!-- 文本工具：输入内容，点“放置”，然后在画布上点击位置 -->
-    <label class="slider">
+    <!-- 文本工具：默认隐藏，三击问号后显示 -->
+    <label class="slider" id="text-tools">
       文本
       <input id="text-input" type="text" placeholder="在这里输入文字" style="max-width:140px;">
       <button id="text-place" class="btn btn-small" type="button">放置</button>
@@ -105,6 +133,9 @@
     </aside>
     <svg id="board" viewBox="0 0 960 560" xmlns="http://www.w3.org/2000/svg" aria-label="画布"></svg>
   </div>
+
+  <!-- 左下角小问号，三击解锁文本工具 -->
+  <button id="secret-toggle" type="button" title="help">?</button>
 
   <script>
   (function(){
@@ -156,12 +187,31 @@
     corner.setAttribute('pointer-events', 'none');
     uiLayer.appendChild(corner);
 
-    var sizeInput  = document.getElementById('size');
-    var gridToggle = document.getElementById('grid');
-    var incBtn     = document.getElementById('len-inc');
-    var decBtn     = document.getElementById('len-dec');
-    var textInput  = document.getElementById('text-input');
-    var textPlace  = document.getElementById('text-place');
+    var sizeInput   = document.getElementById('size');
+    var gridToggle  = document.getElementById('grid');
+    var incBtn      = document.getElementById('len-inc');
+    var decBtn      = document.getElementById('len-dec');
+    var textInput   = document.getElementById('text-input');
+    var textPlace   = document.getElementById('text-place');
+    var textTools   = document.getElementById('text-tools');
+    var secretBtn   = document.getElementById('secret-toggle');
+
+    // 小问号三击解锁文本工具
+    var secretClicks = 0;
+    var secretTimer = null;
+    if (secretBtn && textTools){
+      secretBtn.addEventListener('click', function(){
+        secretClicks++;
+        if (secretTimer) clearTimeout(secretTimer);
+        secretTimer = setTimeout(function(){ secretClicks = 0; }, 600);  // 0.6 秒内三击
+
+        if (secretClicks >= 3){
+          secretClicks = 0;
+          textTools.style.display = 'inline-flex';
+          hint('已解锁文本工具');
+        }
+      });
+    }
 
     try{
       var pref = localStorage.getItem('grid_on');
@@ -267,7 +317,7 @@
       render();
     });
 
-    // 文本放置：点击按钮进入“待放置”状态，下一次点击画布落点
+    // 文本放置：点击按钮进入“待放置”状态，或触发彩蛋
     textPlace.addEventListener('click', function(){
       var txt = (textInput.value || '').trim();
       if (!txt){
@@ -275,6 +325,26 @@
         textInput.focus();
         return;
       }
+
+      // 彩蛋：输入 AAAAA，直接在画板右下角放置 BBBBB
+      if (txt === 'AAAAA'){
+        var x = COLS * GRID - GRID * 0.5;
+        var y = ROWS * GRID - GRID * 0.6;
+        labels.push({
+          id: nextLabelId++,
+          x: x,
+          y: y,
+          text: 'BBBBB'
+        });
+        textInput.value = '';
+        placingText = false;
+        textToPlace = '';
+        render();
+        hint('发现彩蛋！');
+        return;
+      }
+
+      // 正常逻辑：下次点击画板时在点击处落点
       textToPlace = txt;
       placingText = true;
       hint('请在画布上点击放置文字');
@@ -373,12 +443,12 @@
       }
     });
 
-    // 画布点击：如果在放置文字模式，就在点击处落一个文本
+    // 画布点击：放置普通文字
     board.addEventListener('click', function(e){
       if (!placingText) return;
       var p = clientToSvg(e);
 
-      // 稍微对齐一下网格中心
+      // 对齐到网格中心附近
       var gx = Math.round(p.x/GRID)*GRID + GRID*0.5;
       var gy = Math.round(p.y/GRID)*GRID + GRID*0.6;
 
