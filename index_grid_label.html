@@ -77,15 +77,21 @@
     <label class="chk"><input id="grid" type="checkbox" checked> 网格</label>
     <button id="rotate" class="btn" title="旋转选中的小棒">旋转</button>
 
-    <!-- 长度用 + / - 控制 -->
+    <!-- 长度用 + / - 控制（中间不显示数字） -->
     <label class="slider">
       长度
       <button id="len-dec" class="btn btn-small" type="button">-</button>
-      <span id="len-display">-</span>
       <button id="len-inc" class="btn btn-small" type="button">+</button>
       <!-- 隐藏的 range，用来复用原来的逻辑 -->
       <input id="size" type="range" min="1" max="10" step="1" value="1"
              disabled style="display:none;">
+    </label>
+
+    <!-- 文本工具：输入内容，点“放置”，然后在画布上点击位置 -->
+    <label class="slider">
+      文本
+      <input id="text-input" type="text" placeholder="在这里输入文字" style="max-width:140px;">
+      <button id="text-place" class="btn btn-small" type="button">放置</button>
     </label>
 
     <button id="delete" class="btn" title="删除选中的小棒">删除</button>
@@ -114,19 +120,26 @@
     };
 
     var rods = [];
+    var labels = [];
     var selectedId = null;
     var drag = null;
     var nextId = 1;
+    var nextLabelId = 1;
+    var placingText = false;
+    var textToPlace = '';
 
     var board = document.getElementById('board');
     board.setAttribute('viewBox', '0 0 ' + (COLS*GRID) + ' ' + (ROWS*GRID));
 
-    var gridLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-    var rodsLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-    var selLayer  = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-    var uiLayer   = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    var gridLayer   = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    var rodsLayer   = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    var labelsLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    var selLayer    = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    var uiLayer     = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+
     board.appendChild(gridLayer);
     board.appendChild(rodsLayer);
+    board.appendChild(labelsLayer);
     board.appendChild(selLayer);
     board.appendChild(uiLayer);
 
@@ -143,11 +156,12 @@
     corner.setAttribute('pointer-events', 'none');
     uiLayer.appendChild(corner);
 
-    var sizeInput = document.getElementById('size');
+    var sizeInput  = document.getElementById('size');
     var gridToggle = document.getElementById('grid');
-    var lenDisplay = document.getElementById('len-display');
-    var incBtn = document.getElementById('len-inc');
-    var decBtn = document.getElementById('len-dec');
+    var incBtn     = document.getElementById('len-inc');
+    var decBtn     = document.getElementById('len-dec');
+    var textInput  = document.getElementById('text-input');
+    var textPlace  = document.getElementById('text-place');
 
     try{
       var pref = localStorage.getItem('grid_on');
@@ -224,6 +238,7 @@
       if (!confirm('清空全部小棒？')) return;
       rods = [];
       selectedId = null;
+      labels = [];
       render();
       syncSizeControl();
     });
@@ -250,12 +265,19 @@
       r.color = PALETTE[newLen] || r.color;
       snapIntoBounds(r);
       render();
+    });
 
-      if (lenDisplay) lenDisplay.textContent = String(newLen);
-      if (incBtn && decBtn){
-        incBtn.disabled = newLen >= 10;
-        decBtn.disabled = newLen <= 1;
+    // 文本放置：点击按钮进入“待放置”状态，下一次点击画布落点
+    textPlace.addEventListener('click', function(){
+      var txt = (textInput.value || '').trim();
+      if (!txt){
+        hint('请输入文字后再点击“放置”');
+        textInput.focus();
+        return;
       }
+      textToPlace = txt;
+      placingText = true;
+      hint('请在画布上点击放置文字');
     });
 
     // 网格开关
@@ -265,7 +287,7 @@
       try{ localStorage.setItem('grid_on', gridToggle.checked ? '1' : '0'); }catch(_){}
     }
 
-    // 键盘快捷键仍然可用
+    // 键盘快捷键
     window.addEventListener('keydown', function(e){
       if (e.key === 'Delete' || e.key === 'Backspace') {
         document.getElementById('delete').click();
@@ -280,6 +302,11 @@
       if (e.key === '-' && !sizeInput.disabled){
         sizeInput.stepDown();
         sizeInput.dispatchEvent(new Event('input'));
+      }
+      if (e.key === 'Escape' && placingText){
+        placingText = false;
+        textToPlace = '';
+        hint('已取消放置文字');
       }
     });
 
@@ -325,6 +352,7 @@
       try{ board.releasePointerCapture(e.pointerId);}catch(_){}
     }
 
+    // 点击小棒选中 / 双击旋转
     rodsLayer.addEventListener('click', function(e){
       if (e.target && e.target.tagName === 'rect'){
         selectedId = Number(e.target.getAttribute('data-id'));
@@ -345,6 +373,29 @@
       }
     });
 
+    // 画布点击：如果在放置文字模式，就在点击处落一个文本
+    board.addEventListener('click', function(e){
+      if (!placingText) return;
+      var p = clientToSvg(e);
+
+      // 稍微对齐一下网格中心
+      var gx = Math.round(p.x/GRID)*GRID + GRID*0.5;
+      var gy = Math.round(p.y/GRID)*GRID + GRID*0.6;
+
+      labels.push({
+        id: nextLabelId++,
+        x: gx,
+        y: gy,
+        text: textToPlace
+      });
+
+      placingText = false;
+      textToPlace = '';
+      if (textInput) textInput.value = '';
+      render();
+      hint('已放置文字');
+    });
+
     function getSelected(){
       for (var i=0; i<rods.length; i++){
         if (rods[i].id === selectedId) return rods[i];
@@ -356,24 +407,15 @@
       var r = getSelected();
       if (!r){
         sizeInput.disabled = true;
-        if (lenDisplay) lenDisplay.textContent = '-';
-        if (incBtn && decBtn){
-          incBtn.disabled = true;
-          decBtn.disabled = true;
-        }
+        incBtn.disabled = true;
+        decBtn.disabled = true;
         return;
       }
-
-      var clamped =
-        Math.max(1, Math.min(10, r.len));
+      var clamped = Math.max(1, Math.min(10, r.len));
       sizeInput.disabled = false;
       sizeInput.value = String(clamped);
-
-      if (lenDisplay) lenDisplay.textContent = String(clamped);
-      if (incBtn && decBtn){
-        incBtn.disabled = clamped >= 10;
-        decBtn.disabled = clamped <= 1;
-      }
+      incBtn.disabled = clamped >= 10;
+      decBtn.disabled = clamped <= 1;
     }
 
     function snapIntoBounds(r){
@@ -419,6 +461,7 @@
     }
 
     function render(){
+      // rods
       while (rodsLayer.firstChild) rodsLayer.removeChild(rodsLayer.firstChild);
       rods.forEach(function(r){
         var rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
@@ -440,43 +483,83 @@
         rodsLayer.appendChild(rect);
       });
 
+      // labels
+      while (labelsLayer.firstChild) labelsLayer.removeChild(labelsLayer.firstChild);
+      labels.forEach(function(lb){
+        var txt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        txt.textContent = lb.text;
+        txt.setAttribute('x', lb.x);
+        txt.setAttribute('y', lb.y);
+        txt.setAttribute('fill', '#000');
+        txt.setAttribute('font-size', '14');
+        txt.setAttribute('font-family', 'inherit');
+        txt.setAttribute('text-anchor', 'middle');
+        txt.setAttribute('dominant-baseline', 'middle');
+        labelsLayer.appendChild(txt);
+      });
+
+      // selection outline
       while (selLayer.firstChild) selLayer.removeChild(selLayer.firstChild);
       var r = getSelected();
       if (r){
-        var w = r.vert ? GRID : r.len * GRID;
-        var h = r.vert ? r.len * GRID : GRID;
+        var w2 = r.vert ? GRID : r.len * GRID;
+        var h2 = r.vert ? r.len * GRID : GRID;
         var outline = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
         outline.setAttribute('x', r.x - 2);
         outline.setAttribute('y', r.y - 2);
-        outline.setAttribute('width', w + 4);
-        outline.setAttribute('height', h + 4);
+        outline.setAttribute('width', w2 + 4);
+        outline.setAttribute('height', h2 + 4);
         outline.setAttribute('fill', 'none');
         outline.setAttribute('stroke', '#1565c0');
         outline.setAttribute('stroke-width', '2');
         outline.setAttribute('stroke-dasharray', '6 4');
         selLayer.appendChild(outline);
       }
-      document.getElementById('status').textContent = rods.length + ' 根小棒';
+
+      document.getElementById('status').textContent =
+        rods.length + ' 根小棒，' + labels.length + ' 个文本';
     }
 
     window.addEventListener('beforeunload', function(){
-      try{ localStorage.setItem('rods_layout', JSON.stringify(rods)); }catch(_){}
+      try{
+        localStorage.setItem('rods_layout', JSON.stringify(rods));
+        localStorage.setItem('labels_layout', JSON.stringify(labels));
+      }catch(_){}
     });
 
     (function restore(){
       try{
-        var s = localStorage.getItem('rods_layout'); if (!s) return;
-        var arr = JSON.parse(s);
-        if (Array.isArray(arr)){
-          rods = arr.map(function(r){
-            r.color = PALETTE[Math.max(1, Math.min(10, r.len || 1))];
-            return r;
-          });
-          selectedId = null;
-          nextId = 1 + rods.reduce(function(m,r){ return Math.max(m, r.id || 0); }, 0);
-          render();
-          syncSizeControl();
+        var s = localStorage.getItem('rods_layout');
+        if (s){
+          var arr = JSON.parse(s);
+          if (Array.isArray(arr)){
+            rods = arr.map(function(r){
+              r.color = PALETTE[Math.max(1, Math.min(10, r.len || 1))];
+              return r;
+            });
+            selectedId = null;
+            nextId = 1 + rods.reduce(function(m,r){ return Math.max(m, r.id || 0); }, 0);
+          }
         }
+
+        var t = localStorage.getItem('labels_layout');
+        if (t){
+          var arr2 = JSON.parse(t);
+          if (Array.isArray(arr2)){
+            labels = arr2.map(function(lb){
+              return {
+                id: lb.id || 0,
+                x: lb.x || 0,
+                y: lb.y || 0,
+                text: String(lb.text || '')
+              };
+            });
+            nextLabelId = 1 + labels.reduce(function(m,lb){ return Math.max(m, lb.id || 0); }, 0);
+          }
+        }
+
+        render();
+        syncSizeControl();
       }catch(_){}
     })();
 
@@ -484,7 +567,7 @@
       var el = document.getElementById('status');
       el.textContent = msg;
       setTimeout(function(){
-        el.textContent = rods.length + ' 根小棒';
+        el.textContent = rods.length + ' 根小棒，' + labels.length + ' 个文本';
       }, 1200);
     }
   })();
