@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>曲奇&可颂</title>
+  <style>
+    :root { --grid: 40; }
+    html, body { height: 100%; margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif; }
+    body { display: flex; flex-direction: column; }
+    header { display: flex; gap: 10px; align-items: center; padding: 10px 12px; border-bottom: 1px solid #e5e5e5; }
+    header > * { font-size: 14px; }
+    .btn { padding: 6px 10px; border: 1px solid #d0d0d0; border-radius: 8px; background: #fafafa; }
+    .btn:active { transform: translateY(1px); }
+    #status { margin-left: auto; font-size: 12px; color: #666; }
+    .main { flex: 1; min-height: 0; display: flex; }
+    #palette { width: 150px; border-right: 1px solid #e5e5e5; padding: 8px; overflow: auto; background: #fff; }
+    #palette h3 { margin: 0 0 8px 0; font-size: 13px; font-weight: 600; color: #444; }
+    .sample { display: block; margin: 8px 0; cursor: pointer; }
+    .sample svg { display: block; width: 100%; height: 22px; }
+    #board { flex: 1; height: 100%; width: 100%; touch-action: none; background: #fff; }
+    label.slider { display: inline-flex; align-items: center; gap: 6px; padding: 0 6px; }
+    label.chk { display: inline-flex; align-items: center; gap: 6px; user-select: none; }
+    #size { width: 160px; }
+    .err { color:#b00020; font-weight:600; padding-left:8px; }
+  </style>
+</head>
+<body>
+  <header>
+    <label class="chk"><input id="grid" type="checkbox" checked> 网格</label>
+    <button id="rotate" class="btn" title="旋转选中的小棒">旋转</button>
+    <label class="slider">长度 <input id="size" type="range" min="1" max="10" step="1" value="1" disabled></label>
+    <button id="delete" class="btn" title="删除选中的小棒">删除</button>
+    <button id="clear" class="btn" title="清空画布">清空</button>
+    <span id="status"></span>
+  </header>
+
+  <div class="main">
+    <aside id="palette" aria-label="小棒调色板">
+      <h3>长度选择</h3>
+    </aside>
+    <svg id="board" viewBox="0 0 960 560" xmlns="http://www.w3.org/2000/svg" aria-label="画布"></svg>
+  </div>
+
+  <script>
+  (function(){
+    window.addEventListener('error', function(e){
+      var s = document.getElementById('status');
+      if (s) s.innerHTML = '<span class="err">错误: ' + (e.message || e.error) + '</span>';
+    });
+
+    var GRID = 40, COLS = 24, ROWS = 14;
+    var PALETTE = { 1:'#ffffff', 2:'#e53935', 3:'#8bc34a', 4:'#ab47bc', 5:'#ffeb3b', 6:'#2e7d32', 7:'#212121', 8:'#8d6e63', 9:'#1e88e5', 10:'#f9a825' };
+
+    var rods = [];
+    var selectedId = null;
+    var drag = null;
+    var nextId = 1;
+
+    var board = document.getElementById('board');
+    board.setAttribute('viewBox', '0 0 ' + (COLS*GRID) + ' ' + (ROWS*GRID));
+
+    var gridLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    var rodsLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    var selLayer  = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    var uiLayer   = document.createElementNS('http://www.w3.org/2000/svg', 'g'); // for AAA label
+    board.appendChild(gridLayer);
+    board.appendChild(rodsLayer);
+    board.appendChild(selLayer);
+    board.appendChild(uiLayer);
+
+    // bottom-left label
+    var corner = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    corner.textContent = 'Shuyue Qu, Zhuohao Song';                  // 占位符
+    corner.setAttribute('x', 6);
+    corner.setAttribute('y', ROWS*GRID - 6);
+    corner.setAttribute('fill', '#444');
+    corner.setAttribute('font-size', '4');
+    corner.setAttribute('font-family', 'inherit');
+    corner.setAttribute('text-anchor', 'start');
+    corner.setAttribute('dominant-baseline', 'alphabetic');
+    corner.setAttribute('pointer-events', 'none');
+    uiLayer.appendChild(corner);
+
+    var sizeInput = document.getElementById('size');
+    var gridToggle = document.getElementById('grid');
+
+    try{
+      var pref = localStorage.getItem('grid_on');
+      if (pref !== null){ gridToggle.checked = pref === '1'; }
+    }catch(_){}
+
+    buildPalette();
+    drawGrid();
+    applyGridToggle();
+    render();
+    syncSizeControl();
+
+    function buildPalette(){
+      var box = document.getElementById('palette');
+      var olds = box.querySelectorAll('.sample');
+      for (var i=0; i<olds.length; i++) olds[i].remove();
+      for (var len=1; len<=10; len++){
+        var div = document.createElement('div');
+        div.className = 'sample';
+        div.setAttribute('role','button');
+        div.setAttribute('aria-label','长度 ' + len + ' 的小棒');
+        var w = 120, h = 18, pad = 2, scale = (w - 2*pad) / 10;
+        var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('viewBox','0 0 ' + w + ' ' + h);
+        var rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        rect.setAttribute('x', pad);
+        rect.setAttribute('y', pad/2);
+        rect.setAttribute('width', len * scale);
+        rect.setAttribute('height', h - pad);
+        rect.setAttribute('rx', 3);
+        rect.setAttribute('ry', 3);
+        rect.setAttribute('fill', PALETTE[len]);
+        rect.setAttribute('stroke', '#000');
+        rect.setAttribute('stroke-width', '1');
+        rect.setAttribute('shape-rendering','crispEdges');
+        svg.appendChild(rect);
+        div.appendChild(svg);
+        div.addEventListener('click', (function(L){ return function(){ addRod(L, PALETTE[L]); }; })(len));
+        box.appendChild(div);
+      }
+    }
+
+    function addRod(len, color){
+      var id = nextId++;
+      var yRow = (rods.length % ROWS) * GRID;
+      rods.push({ id:id, x:0, y:yRow, len:len, vert:false, color:color });
+      selectedId = id;
+      render();
+      syncSizeControl();
+      hint('已添加一根长度 ' + len + ' 的小棒');
+    }
+
+    document.getElementById('rotate').addEventListener('click', function(){
+      var r = getSelected(); if (!r) return;
+      r.vert = !r.vert;
+      snapIntoBounds(r);
+      render();
+    });
+
+    document.getElementById('delete').addEventListener('click', function(){
+      if (selectedId == null) return;
+      rods = rods.filter(function(r){ return r.id !== selectedId; });
+      selectedId = null;
+      render();
+      syncSizeControl();
+    });
+
+    document.getElementById('clear').addEventListener('click', function(){
+      if (!confirm('清空全部小棒？')) return;
+      rods = []; selectedId = null;
+      render(); syncSizeControl();
+    });
+
+    sizeInput.addEventListener('input', function(){
+      var r = getSelected(); if (!r) return;
+      var newLen = Number(sizeInput.value);
+      r.len = newLen; r.color = PALETTE[newLen] || r.color;
+      snapIntoBounds(r); render();
+    });
+
+    // 网格开关
+    gridToggle.addEventListener('change', applyGridToggle);
+    function applyGridToggle(){
+      gridLayer.style.display = gridToggle.checked ? '' : 'none';
+      try{ localStorage.setItem('grid_on', gridToggle.checked ? '1' : '0'); }catch(_){}
+    }
+
+    window.addEventListener('keydown', function(e){
+      if (e.key === 'Delete' || e.key === 'Backspace') document.getElementById('delete').click();
+      if ((e.key === 'r' || e.key === 'R') && selectedId != null) document.getElementById('rotate').click();
+      if ((e.key === '+' || e.key === '=') && !sizeInput.disabled){ sizeInput.stepUp(); sizeInput.dispatchEvent(new Event('input')); }
+      if (e.key === '-' && !sizeInput.disabled){ sizeInput.stepDown(); sizeInput.dispatchEvent(new Event('input')); }
+    });
+
+    rodsLayer.addEventListener('pointerdown', onPointerDown);
+    board.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+
+    function onPointerDown(e){
+      var t = e.target;
+      if (!(t && t.tagName === 'rect')) return;
+      var id = Number(t.getAttribute('data-id'));
+      var r = rods.find(function(x){ return x.id === id; });
+      if (!r) return;
+      selectedId = id;
+      var p = clientToSvg(e);
+      drag = { id:id, dx:p.x - r.x, dy:p.y - r.y };
+      render(); syncSizeControl();
+      board.setPointerCapture(e.pointerId);
+    }
+    function onPointerMove(e){
+      if (!drag) return;
+      var r = rods.find(function(x){ return x.id === drag.id; });
+      if (!r) return;
+      var p = clientToSvg(e);
+      r.x = p.x - drag.dx; r.y = p.y - drag.dy; render();
+    }
+    function onPointerUp(e){
+      if (!drag) return;
+      var r = rods.find(function(x){ return x.id === drag.id; });
+      if (r){ r.x = Math.round(r.x/GRID)*GRID; r.y = Math.round(r.y/GRID)*GRID; snapIntoBounds(r); render(); }
+      drag = null; try{ board.releasePointerCapture(e.pointerId);}catch(_){}
+    }
+
+    rodsLayer.addEventListener('click', function(e){
+      if (e.target && e.target.tagName === 'rect'){
+        selectedId = Number(e.target.getAttribute('data-id'));
+        render(); syncSizeControl();
+      }
+    });
+    rodsLayer.addEventListener('dblclick', function(e){
+      if (e.target && e.target.tagName === 'rect'){
+        selectedId = Number(e.target.getAttribute('data-id'));
+        var r = getSelected(); if (r){ r.vert = !r.vert; snapIntoBounds(r); render(); }
+      }
+    });
+
+    function getSelected(){
+      for (var i=0;i<rods.length;i++){ if (rods[i].id===selectedId) return rods[i]; }
+      return null;
+    }
+
+    function syncSizeControl(){
+      var r = getSelected();
+      if (!r){ sizeInput.disabled = true; return; }
+      sizeInput.disabled = false;
+      sizeInput.value = String(Math.max(1, Math.min(10, r.len)));
+    }
+
+    function snapIntoBounds(r){
+      var maxXCells = r.vert ? COLS - 1 : COLS - r.len;
+      var maxYCells = r.vert ? ROWS - r.len : ROWS - 1;
+      r.x = Math.max(0, Math.min(maxXCells * GRID, r.x));
+      r.y = Math.max(0, Math.min(maxYCells * GRID, r.y));
+    }
+
+    function clientToSvg(e){
+      var pt = board.createSVGPoint();
+      pt.x = e.clientX; pt.y = e.clientY;
+      var ctm = board.getScreenCTM(); var inv = ctm && ctm.inverse();
+      return pt.matrixTransform(inv);
+    }
+
+    function drawGrid(){
+      while (gridLayer.firstChild) gridLayer.removeChild(gridLayer.firstChild);
+      for (var i=0; i<=COLS; i++){
+        var x = i * GRID;
+        var line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', x); line.setAttribute('y1', 0);
+        line.setAttribute('x2', x); line.setAttribute('y2', ROWS*GRID);
+        line.setAttribute('stroke', (i % 5 === 0) ? '#cfd8dc' : '#eceff1');
+        line.setAttribute('stroke-width', (i % 5 === 0) ? '1.2' : '0.6');
+        gridLayer.appendChild(line);
+      }
+      for (var j=0; j<=ROWS; j++){
+        var y = j * GRID;
+        var line2 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line2.setAttribute('x1', 0); line2.setAttribute('y1', y);
+        line2.setAttribute('x2', COLS*GRID); line2.setAttribute('y2', y);
+        line2.setAttribute('stroke', (j % 5 === 0) ? '#cfd8dc' : '#eceff1');
+        line2.setAttribute('stroke-width', (j % 5 === 0) ? '1.2' : '0.6');
+        gridLayer.appendChild(line2);
+      }
+    }
+
+    function render(){
+      while (rodsLayer.firstChild) rodsLayer.removeChild(rodsLayer.firstChild);
+      rods.forEach(function(r){
+        var rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        var w = r.vert ? GRID : r.len * GRID;
+        var h = r.vert ? r.len * GRID : GRID;
+        rect.setAttribute('x', r.x); rect.setAttribute('y', r.y);
+        rect.setAttribute('width', w); rect.setAttribute('height', h);
+        rect.setAttribute('rx', 4); rect.setAttribute('ry', 4);
+        rect.setAttribute('fill', r.color);
+        rect.setAttribute('stroke', '#000'); rect.setAttribute('stroke-width', '1');
+        rect.setAttribute('shape-rendering','crispEdges');
+        rect.setAttribute('opacity', (r.id === selectedId) ? '0.95' : '1');
+        rect.setAttribute('data-id', String(r.id));
+        rect.style.cursor = 'grab';
+        rodsLayer.appendChild(rect);
+      });
+
+      while (selLayer.firstChild) selLayer.removeChild(selLayer.firstChild);
+      var r = getSelected();
+      if (r){
+        var w = r.vert ? GRID : r.len * GRID;
+        var h = r.vert ? r.len * GRID : GRID;
+        var outline = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        outline.setAttribute('x', r.x - 2); outline.setAttribute('y', r.y - 2);
+        outline.setAttribute('width', w + 4); outline.setAttribute('height', h + 4);
+        outline.setAttribute('fill', 'none'); outline.setAttribute('stroke', '#1565c0');
+        outline.setAttribute('stroke-width', '2'); outline.setAttribute('stroke-dasharray', '6 4');
+        selLayer.appendChild(outline);
+      }
+      document.getElementById('status').textContent = rods.length + ' 根小棒';
+    }
+
+    window.addEventListener('beforeunload', function(){
+      try{ localStorage.setItem('rods_layout', JSON.stringify(rods)); }catch(_){}
+    });
+    (function restore(){
+      try{
+        var s = localStorage.getItem('rods_layout'); if (!s) return;
+        var arr = JSON.parse(s);
+        if (Array.isArray(arr)){
+          rods = arr.map(function(r){ r.color = PALETTE[Math.max(1, Math.min(10, r.len||1))]; return r; });
+          selectedId = null;
+          nextId = 1 + rods.reduce(function(m,r){ return Math.max(m, r.id||0); }, 0);
+          render(); syncSizeControl();
+        }
+      }catch(_){}
+    })();
+
+    function hint(msg){
+      var el = document.getElementById('status');
+      el.textContent = msg; setTimeout(function(){ el.textContent = rods.length + ' 根小棒'; }, 1200);
+    }
+  })();
+  </script>
+</body>
+</html>
